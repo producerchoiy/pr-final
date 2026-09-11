@@ -659,11 +659,17 @@ def task_card(task: dict[str, Any]) -> str:
 
 def schedule_row(task: dict[str, Any]) -> str:
     urgent = " urgent" if task.get("priority") == "긴급" else ""
+    repeat_labels = {"daily": "매일", "weekday": "평일", "weekly": "매주", "none": "반복 없음"}
+    repeat_label = repeat_labels.get(str(task.get("repeat_type") or "none"), "반복 없음")
+    reminder = "알람 끔"
+    if task.get("reminder_enabled", True):
+        minutes = int(task.get("reminder_minutes_before", 0) or 0)
+        reminder = "시작 알람" if minutes == 0 else f"{minutes}분 전 알람"
     return f"""
     <div class="schedule-row{urgent}">
         <div class="schedule-time">{escape(str(task.get('start_time') or '--:--')[:5])}–{escape(str(task.get('end_time') or '--:--')[:5])}</div>
         <div class="schedule-title">{escape(str(task.get('title', '')))}</div>
-        <div class="schedule-next">다음 행동 · {escape(str(task.get('next_action') or '지정이 필요합니다.'))}</div>
+        <div class="schedule-next">다음 행동 · {escape(str(task.get('next_action') or '지정이 필요합니다.'))}<br>{escape(repeat_label)} · {escape(reminder)}</div>
     </div>
     """
 

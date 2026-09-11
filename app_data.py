@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import time
 from typing import Any
 
 
 WORKFLOW_STATUSES = [
     "기획",
+    "진행 중",
     "제작",
     "편집",
     "검토대기",
@@ -72,165 +73,28 @@ DEFAULT_DOCUMENT_TEMPLATES = [
 ]
 
 
-def _iso(day: date) -> str:
-    return day.isoformat()
+def initial_store() -> dict[str, list[dict[str, Any]]]:
+    """Blank working store used when Supabase is not connected.
 
-
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _task(
-    task_id: str,
-    title: str,
-    category: str,
-    status: str,
-    priority: str,
-    deadline: date,
-    execution_date: date,
-    start_time: str,
-    end_time: str,
-    steps: list[tuple[str, bool]],
-    **extra: Any,
-) -> dict[str, Any]:
-    first_pending = next((name for name, completed in steps if not completed), "완료")
-    now = _timestamp()
+    Sample tasks are intentionally excluded so a deleted item can never be
+    recreated merely because Streamlit reran or a browser session restarted.
+    """
     return {
-        "task_id": task_id,
-        "title": title,
-        "category": category,
-        "status": status,
-        "priority": priority,
-        "deadline": _iso(deadline),
-        "execution_date": _iso(execution_date),
-        "start_time": start_time,
-        "end_time": end_time,
-        "next_action": first_pending,
-        "waiting_for": None,
-        "waiting_type": None,
-        "request_date": None,
-        "followup_date": None,
-        "description": "",
-        "featured": False,
-        "project_id": None,
-        "created_at": now,
-        "updated_at": now,
-        "workflow_steps": [
-            {"id": f"{task_id}-S{index:02d}", "task_id": task_id, "step_order": index, "title": name, "completed": completed}
-            for index, (name, completed) in enumerate(steps, start=1)
+        "tasks": [],
+        "task_steps": [],
+        "projects": [],
+        "categories": [
+            {"id": f"CAT-{index:02d}", "name": name}
+            for index, name in enumerate(DEFAULT_CATEGORIES, start=1)
         ],
-        **extra,
-    }
-
-
-def demo_store(today: date | None = None) -> dict[str, list[dict[str, Any]]]:
-    today = today or date.today()
-    tasks = [
-        _task(
-            f"TASK-{today.strftime('%Y%m%d')}-001",
-            "감염내과 정경화 교수 독감 인터뷰",
-            "유튜브",
-            "편집",
-            "높음",
-            today + timedelta(days=3),
-            today,
-            "14:00",
-            "15:30",
-            [("영상 편집", True), ("썸네일 제작", False), ("팀장 검토", False), ("교수 검토", False), ("업로드", False)],
-            description="독감 유행 전 정확한 예방 정보를 전달하는 교수 인터뷰",
-            featured=True,
-        ),
-        _task(
-            f"TASK-{today.strftime('%Y%m%d')}-002",
-            "입원생활안내 추가 수정",
-            "콘텐츠",
-            "검토대기",
-            "높음",
-            today,
-            today,
-            "10:00",
-            "11:30",
-            [("수정사항 반영", True), ("병동 파트장 검토", False), ("최종본 배포", False)],
-            waiting_for="병동 파트장",
-            waiting_type="검토",
-            request_date=f"{today.isoformat()}T11:20:00",
-            followup_date=f"{today.isoformat()}T16:00:00",
-            featured=True,
-        ),
-        _task(
-            f"TASK-{today.strftime('%Y%m%d')}-003",
-            "암병원 개소 행사 촬영",
-            "촬영",
-            "제작",
-            "긴급",
-            today,
-            today,
-            "13:00",
-            "14:00",
-            [("촬영", False), ("촬영물 백업", False), ("사진 선별", False), ("부서 메일 전송", False), ("포토앨범 업로드", False)],
-            project_id="PROJECT-001",
-            next_action="촬영 동선 최종 확인",
-        ),
-        _task(
-            f"TASK-{today.strftime('%Y%m%d')}-004",
-            "LG헬로비전 교수 일정 재확인",
-            "방송",
-            "회신대기",
-            "보통",
-            today + timedelta(days=4),
-            today,
-            "09:30",
-            "10:00",
-            [("교수 일정 문의", True), ("촬영일 확정", False), ("기자에게 결과 전달", False)],
-            waiting_for="김OO 교수",
-            waiting_type="일정 회신",
-            request_date=f"{(today - timedelta(days=2)).isoformat()}T14:20:00",
-            followup_date=f"{today.isoformat()}T15:00:00",
-        ),
-        _task(
-            f"TASK-{today.strftime('%Y%m%d')}-005",
-            "10월 유튜브 주제 선정",
-            "유튜브",
-            "기획",
-            "보통",
-            today + timedelta(days=6),
-            today + timedelta(days=1),
-            "09:00",
-            "10:00",
-            [("검색 수요 확인", False), ("후보 주제 정리", False), ("출연 교수 검토", False)],
-        ),
-        _task(
-            f"TASK-{today.strftime('%Y%m%d')}-006",
-            "LG헬로비전 인터뷰 업로드",
-            "방송",
-            "배포",
-            "높음",
-            today + timedelta(days=2),
-            today + timedelta(days=2),
-            "16:00",
-            "16:30",
-            [("영상 최종 확인", True), ("업로드", False), ("링크 공유", False)],
-            featured=True,
-        ),
-    ]
-    return {
-        "tasks": tasks,
-        "projects": [{"id": "PROJECT-001", "name": "암병원 개소 행사", "description": "행사 촬영과 후속 배포 업무"}],
-        "categories": [{"id": f"CAT-{index:02d}", "name": name} for index, name in enumerate(DEFAULT_CATEGORIES, start=1)],
-        "task_templates": DEFAULT_TASK_TEMPLATES.copy(),
-        "reminders": [
-            {"id": "REM-001", "title": "일일업무보고 작성", "reminder_time": "16:00", "repeat_type": "weekday", "enabled": True},
-            {"id": "REM-002", "title": "스튜디오 불 끄기", "reminder_time": "16:30", "repeat_type": "weekday", "enabled": True},
-            {"id": "REM-003", "title": "촬영물 백업 여부 확인", "reminder_time": "17:00", "repeat_type": "weekday", "enabled": True},
-        ],
-        "checklists": [
-            {"id": "CHK-001", "title": "촬영물 백업 및 각 부서 메일 전송", "enabled": True, "checked_on": None},
-            {"id": "CHK-002", "title": "16:00 일일업무보고 작성", "enabled": True, "checked_on": None},
-            {"id": "CHK-003", "title": "16:30 스튜디오 불 끄기", "enabled": True, "checked_on": None},
-        ],
+        "task_templates": [dict(item) for item in DEFAULT_TASK_TEMPLATES],
+        "reminders": [],
+        "checklists": [],
         "content_records": [],
         "documents": [],
-        "document_templates": DEFAULT_DOCUMENT_TEMPLATES.copy(),
+        "document_templates": [dict(item) for item in DEFAULT_DOCUMENT_TEMPLATES],
+        "waiting_items": [],
+        "task_status_history": [],
     }
 
 

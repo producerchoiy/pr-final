@@ -5,7 +5,14 @@ create table if not exists public.projects (
   id text primary key,
   name text not null,
   description text default '',
-  created_at timestamptz default now()
+  start_date date,
+  deadline date,
+  department text default '',
+  status text default '진행 중',
+  priority text default '보통',
+  memo text default '',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
 );
 
 create table if not exists public.categories (
@@ -32,6 +39,19 @@ create table if not exists public.tasks (
   description text default '',
   featured boolean default false,
   project_id text references public.projects(id) on delete set null,
+  previous_status text,
+  completed_at timestamptz,
+  reopened_at timestamptz,
+  deleted_at timestamptz,
+  reminder_enabled boolean default true,
+  reminder_minutes_before integer default 0,
+  alarm_last_fired_at timestamptz,
+  repeat_type text default 'none',
+  repeat_days jsonb default '[]'::jsonb,
+  repeat_start_date date,
+  repeat_end_date date,
+  excluded_dates jsonb default '[]'::jsonb,
+  sort_order integer default 9999,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -92,7 +112,16 @@ create table if not exists public.content_records (
   upload_date date,
   url text default '',
   memo text default '',
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists public.task_status_history (
+  id text primary key,
+  task_id text not null references public.tasks(task_id) on delete cascade,
+  from_status text,
+  to_status text not null,
+  changed_at timestamptz default now()
 );
 
 create table if not exists public.document_templates (
@@ -119,6 +148,35 @@ create table if not exists public.documents (
   updated_at timestamptz default now()
 );
 
+-- 기존 설치에도 새 필드를 안전하게 추가합니다. 이 파일은 여러 번 실행해도 됩니다.
+alter table public.projects add column if not exists start_date date;
+alter table public.projects add column if not exists deadline date;
+alter table public.projects add column if not exists department text default '';
+alter table public.projects add column if not exists status text default '진행 중';
+alter table public.projects add column if not exists priority text default '보통';
+alter table public.projects add column if not exists memo text default '';
+alter table public.projects add column if not exists updated_at timestamptz default now();
+
+alter table public.tasks add column if not exists previous_status text;
+alter table public.tasks add column if not exists completed_at timestamptz;
+alter table public.tasks add column if not exists reopened_at timestamptz;
+alter table public.tasks add column if not exists deleted_at timestamptz;
+alter table public.tasks add column if not exists reminder_enabled boolean default true;
+alter table public.tasks add column if not exists reminder_minutes_before integer default 0;
+alter table public.tasks add column if not exists alarm_last_fired_at timestamptz;
+alter table public.tasks add column if not exists repeat_type text default 'none';
+alter table public.tasks add column if not exists repeat_days jsonb default '[]'::jsonb;
+alter table public.tasks add column if not exists repeat_start_date date;
+alter table public.tasks add column if not exists repeat_end_date date;
+alter table public.tasks add column if not exists excluded_dates jsonb default '[]'::jsonb;
+alter table public.tasks add column if not exists sort_order integer default 9999;
+alter table public.content_records add column if not exists updated_at timestamptz default now();
+
+create index if not exists idx_tasks_active_dates on public.tasks (deleted_at, execution_date, deadline);
+create index if not exists idx_tasks_project on public.tasks (project_id);
+create index if not exists idx_content_records_task on public.content_records (task_id);
+create index if not exists idx_task_status_history_task on public.task_status_history (task_id, changed_at desc);
+
 insert into storage.buckets (id, name, public)
 values ('pr-documents', 'pr-documents', false)
 on conflict (id) do nothing;
@@ -127,23 +185,11 @@ insert into public.categories (id, name) values
   ('CAT-01', '유튜브'), ('CAT-02', '촬영'), ('CAT-03', '편집'),
   ('CAT-04', '방송'), ('CAT-05', '사진'), ('CAT-06', '대본'),
   ('CAT-07', '콘텐츠'), ('CAT-08', '행사'), ('CAT-09', '사무 업무'), ('CAT-10', '기타')
-on conflict (id) do nothing;
+on conflict do nothing;
 
 insert into public.task_templates (id, name, category, steps) values
   ('TPL-EVENT-PHOTO', '행사 촬영 기본 세트', '촬영', '["촬영","촬영물 백업","사진 선별","사진 보정","해당 부서 메일 전송","포토앨범 업로드"]'::jsonb),
   ('TPL-YOUTUBE', '유튜브 인터뷰 기본 세트', '유튜브', '["질문지 작성","교수 일정 확정","촬영","영상 편집","썸네일 제작","팀장 검토","교수 검토","업로드"]'::jsonb)
-on conflict (id) do nothing;
-
-insert into public.reminders (id, title, reminder_time, repeat_type, enabled) values
-  ('REM-001', '일일업무보고 작성', '16:00', 'weekday', true),
-  ('REM-002', '스튜디오 불 끄기', '16:30', 'weekday', true),
-  ('REM-003', '촬영물 백업 여부 확인', '17:00', 'weekday', true)
-on conflict (id) do nothing;
-
-insert into public.checklists (id, title, enabled) values
-  ('CHK-001', '촬영물 백업 및 각 부서 메일 전송', true),
-  ('CHK-002', '16:00 일일업무보고 작성', true),
-  ('CHK-003', '16:30 스튜디오 불 끄기', true)
 on conflict (id) do nothing;
 
 insert into public.document_templates (id, name, document_type, content) values
@@ -164,6 +210,7 @@ alter table public.checklists enable row level security;
 alter table public.content_records enable row level security;
 alter table public.document_templates enable row level security;
 alter table public.documents enable row level security;
+alter table public.task_status_history enable row level security;
 
 -- 본 앱은 Streamlit 서버의 service_role key로만 접근합니다.
 -- service_role은 RLS를 우회하므로 공개 브라우저 코드나 GitHub에 노출하지 마세요.

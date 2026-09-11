@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 
-from app_data import demo_store, first_pending_step
+from app_data import first_pending_step, initial_store
 from database import DatabaseError, SupabaseClient
 
 
@@ -41,8 +41,9 @@ class Repository:
 
     def __init__(self) -> None:
         self.db = SupabaseClient()
-        if "pr_store" not in st.session_state:
-            st.session_state.pr_store = demo_store()
+        if "pr_store" not in st.session_state or st.session_state.get("pr_store_version") != 2:
+            st.session_state.pr_store = initial_store()
+            st.session_state.pr_store_version = 2
 
     @property
     def persistent(self) -> bool:
@@ -90,8 +91,10 @@ class Repository:
         rows = st.session_state.pr_store.setdefault(table, [])
         st.session_state.pr_store[table] = [row for row in rows if str(row.get(id_field)) != str(item_id)]
 
-    def list_tasks(self) -> list[dict[str, Any]]:
+    def list_tasks(self, *, include_deleted: bool = False) -> list[dict[str, Any]]:
         tasks = self._rows("tasks", "execution_date.asc,start_time.asc")
+        if not include_deleted:
+            tasks = [task for task in tasks if not task.get("deleted_at")]
         steps = self._rows("task_steps", "step_order.asc")
         grouped: dict[str, list[dict[str, Any]]] = {}
         for step in steps:
@@ -137,10 +140,10 @@ class Repository:
             "category": payload.get("category", "기타"),
             "status": payload.get("status", "기획"),
             "priority": payload.get("priority", "보통"),
-            "deadline": _value(payload.get("deadline") or today),
-            "execution_date": _value(payload.get("execution_date") or today),
-            "start_time": _value(payload.get("start_time") or "09:00"),
-            "end_time": _value(payload.get("end_time") or "10:00"),
+            "deadline": _value(payload.get("deadline")) if payload.get("deadline") else None,
+            "execution_date": _value(payload.get("execution_date")) if payload.get("execution_date") else None,
+            "start_time": _value(payload.get("start_time")) if payload.get("start_time") else None,
+            "end_time": _value(payload.get("end_time")) if payload.get("end_time") else None,
             "next_action": str(payload.get("next_action") or first_pending_step(steps)).strip(),
             "waiting_for": str(payload.get("waiting_for") or "").strip() or None,
             "waiting_type": str(payload.get("waiting_type") or "").strip() or None,
@@ -149,6 +152,19 @@ class Repository:
             "description": str(payload.get("description") or "").strip(),
             "featured": bool(payload.get("featured", False)),
             "project_id": payload.get("project_id") or None,
+            "previous_status": None,
+            "completed_at": None,
+            "reopened_at": None,
+            "deleted_at": None,
+            "reminder_enabled": bool(payload.get("reminder_enabled", True)),
+            "reminder_minutes_before": int(payload.get("reminder_minutes_before", 0) or 0),
+            "alarm_last_fired_at": None,
+            "repeat_type": payload.get("repeat_type") or "none",
+            "repeat_days": [int(day) for day in payload.get("repeat_days", [])],
+            "repeat_start_date": _value(payload.get("repeat_start_date") or payload.get("execution_date")) if (payload.get("repeat_start_date") or payload.get("execution_date")) else None,
+            "repeat_end_date": _value(payload.get("repeat_end_date")) if payload.get("repeat_end_date") else None,
+            "excluded_dates": [],
+            "sort_order": int(payload.get("sort_order", 9999) or 9999),
             "created_at": now,
             "updated_at": now,
         }
@@ -188,32 +204,129 @@ class Repository:
                     if task.get("task_id") == task_id:
                         task["workflow_steps"] = normalized
                         break
+        old_status = str(current.get("status") or "")
+        new_status = str(changes.get("status") or old_status)
         changes["updated_at"] = _now()
         self._update("tasks", "task_id", task_id, changes)
+        if new_status != old_status:
+            self._insert(
+                "task_status_history",
+                {
+                    "id": f"STATUS-{uuid4().hex[:12].upper()}",
+                    "task_id": task_id,
+                    "from_status": old_status or None,
+                    "to_status": new_status,
+                    "changed_at": changes["updated_at"],
+                },
+            )
         refreshed = {**current, **changes}
         self._sync_waiting(refreshed)
 
     def complete_task(self, task_id: str) -> None:
         task = self.get_task(task_id)
-        if not task:
+        if not task or task.get("status") == "완료":
             return
-        steps = [{**step, "completed": True} for step in task.get("workflow_steps", [])]
-        self.update_task(task_id, {"status": "완료", "next_action": "완료", "workflow_steps": steps})
+        self.update_task(
+            task_id,
+            {
+                "previous_status": task.get("status") or "진행 중",
+                "status": "완료",
+                "completed_at": _now(),
+                "next_action": "완료 처리됨",
+            },
+        )
+
+    def reopen_task(self, task_id: str) -> None:
+        task = self.get_task(task_id)
+        if not task or task.get("status") != "완료":
+            return
+        restored = str(task.get("previous_status") or "진행 중")
+        if restored == "완료":
+            restored = "진행 중"
+        self.update_task(
+            task_id,
+            {
+                "status": restored,
+                "completed_at": None,
+                "reopened_at": _now(),
+                "next_action": first_pending_step(task.get("workflow_steps", [])),
+            },
+        )
+
+    def list_task_status_history(self, task_id: str) -> list[dict[str, Any]]:
+        try:
+            rows = self._rows("task_status_history", "changed_at.desc")
+        except DatabaseError:
+            return []
+        return [row for row in rows if str(row.get("task_id")) == str(task_id)]
 
     def delete_task(self, task_id: str) -> None:
-        if self.persistent:
-            self.db.delete("task_steps", {"task_id": f"eq.{task_id}"})
-        else:
-            for table in ("content_records", "documents"):
-                for row in st.session_state.pr_store.get(table, []):
-                    if row.get("task_id") == task_id:
-                        row["task_id"] = None
+        task = self.get_task(task_id)
+        if not task:
+            return
+        deleted_at = _now()
+        self._update("tasks", "task_id", task_id, {"deleted_at": deleted_at, "updated_at": deleted_at})
+        self._insert(
+            "task_status_history",
+            {
+                "id": f"STATUS-{uuid4().hex[:12].upper()}",
+                "task_id": task_id,
+                "from_status": task.get("status"),
+                "to_status": "삭제",
+                "changed_at": deleted_at,
+            },
+        )
         self._delete("waiting_items", "task_id", task_id)
-        self._delete("tasks", "task_id", task_id)
+
+    def exclude_occurrence(self, task_id: str, occurrence_date: date) -> None:
+        task = self.get_task(task_id)
+        if not task:
+            return
+        excluded = {str(value)[:10] for value in (task.get("excluded_dates") or [])}
+        excluded.add(occurrence_date.isoformat())
+        self.update_task(task_id, {"excluded_dates": sorted(excluded)})
+
+    @staticmethod
+    def task_occurs_on(task: dict[str, Any], target_date: date) -> bool:
+        if task.get("deleted_at") or target_date.isoformat() in {str(value)[:10] for value in (task.get("excluded_dates") or [])}:
+            return False
+        repeat_type = str(task.get("repeat_type") or "none")
+        if repeat_type == "none":
+            return str(task.get("execution_date") or "")[:10] == target_date.isoformat()
+        start_text = task.get("repeat_start_date") or task.get("execution_date")
+        if not start_text:
+            return False
+        try:
+            start_date = date.fromisoformat(str(start_text)[:10])
+            end_date = date.fromisoformat(str(task.get("repeat_end_date"))[:10]) if task.get("repeat_end_date") else None
+        except ValueError:
+            return False
+        if target_date < start_date or (end_date and target_date > end_date):
+            return False
+        if repeat_type == "daily":
+            return True
+        if repeat_type == "weekday":
+            return target_date.weekday() < 5
+        if repeat_type == "weekly":
+            return target_date.weekday() in {int(day) for day in (task.get("repeat_days") or [])}
+        return False
+
+    def tasks_for_date(self, target_date: date, *, timed_only: bool = False) -> list[dict[str, Any]]:
+        rows = [task for task in self.list_tasks() if self.task_occurs_on(task, target_date)]
+        if timed_only:
+            rows = [task for task in rows if task.get("start_time")]
+        return sorted(rows, key=lambda item: (item.get("sort_order", 9999), item.get("start_time") or "23:59"))
+
+    def mark_task_alarm_fired(self, task_id: str, fired_at: str) -> None:
+        self._update("tasks", "task_id", task_id, {"alarm_last_fired_at": fired_at, "updated_at": _now()})
+
+    def update_task_order(self, task_ids: list[str]) -> None:
+        for index, task_id in enumerate(task_ids, start=1):
+            self._update("tasks", "task_id", task_id, {"sort_order": index, "updated_at": _now()})
 
     def _sync_waiting(self, task: dict[str, Any]) -> None:
         task_id = str(task["task_id"])
-        if task.get("waiting_for"):
+        if task.get("waiting_for") and task.get("status") != "완료" and not task.get("deleted_at"):
             row = {
                 "id": f"WAIT-{task_id}",
                 "task_id": task_id,
@@ -269,16 +382,36 @@ class Repository:
     def list_projects(self) -> list[dict[str, Any]]:
         return self._rows("projects", "name.asc")
 
-    def add_project(self, name: str, description: str = "") -> None:
-        self._insert("projects", {"id": f"PROJECT-{uuid4().hex[:8].upper()}", "name": name.strip(), "description": description.strip(), "created_at": _now()})
+    def add_project(self, name: str, description: str = "", **details: Any) -> dict[str, Any]:
+        now = _now()
+        return self._insert(
+            "projects",
+            {
+                "id": f"PROJECT-{uuid4().hex[:8].upper()}",
+                "name": name.strip(),
+                "description": description.strip(),
+                "start_date": _value(details.get("start_date")) if details.get("start_date") else None,
+                "deadline": _value(details.get("deadline")) if details.get("deadline") else None,
+                "department": str(details.get("department") or "").strip(),
+                "status": details.get("status") or "진행 중",
+                "priority": details.get("priority") or "보통",
+                "memo": str(details.get("memo") or "").strip(),
+                "created_at": now,
+                "updated_at": now,
+            },
+        )
 
-    def delete_project(self, item_id: str) -> None:
-        self._delete("projects", "id", item_id)
+    def update_project(self, item_id: str, **changes: Any) -> None:
+        self._update("projects", "id", item_id, {**changes, "updated_at": _now()})
 
-    def add_project(self, name: str, description: str = "") -> None:
-        self._insert("projects", {"id": f"PROJECT-{uuid4().hex[:8].upper()}", "name": name.strip(), "description": description.strip(), "created_at": _now()})
-
-    def delete_project(self, item_id: str) -> None:
+    def delete_project(self, item_id: str, *, delete_tasks: bool = False) -> None:
+        related = [task for task in self.list_tasks() if task.get("project_id") == item_id]
+        if delete_tasks:
+            for task in related:
+                self.delete_task(str(task["task_id"]))
+        else:
+            for task in related:
+                self.update_task(str(task["task_id"]), {"project_id": None})
         self._delete("projects", "id", item_id)
 
     def list_task_templates(self) -> list[dict[str, Any]]:
@@ -317,9 +450,26 @@ class Repository:
     def list_content_records(self) -> list[dict[str, Any]]:
         return self._rows("content_records", "upload_date.desc")
 
-    def add_content_record(self, payload: dict[str, Any]) -> None:
-        row = {"id": f"CONTENT-{uuid4().hex[:8].upper()}", "created_at": _now(), **_clean(payload)}
-        self._insert("content_records", row)
+    def get_content_record(self, item_id: str | None) -> dict[str, Any] | None:
+        if not item_id:
+            return None
+        return next((row for row in self.list_content_records() if str(row.get("id")) == str(item_id)), None)
+
+    def get_content_record_by_task(self, task_id: str | None) -> dict[str, Any] | None:
+        if not task_id:
+            return None
+        return next((row for row in self.list_content_records() if str(row.get("task_id")) == str(task_id)), None)
+
+    def add_content_record(self, payload: dict[str, Any]) -> dict[str, Any]:
+        existing = self.get_content_record_by_task(payload.get("task_id"))
+        if existing:
+            return existing
+        now = _now()
+        row = {"id": f"CONTENT-{uuid4().hex[:8].upper()}", "created_at": now, "updated_at": now, **_clean(payload)}
+        return self._insert("content_records", row)
+
+    def update_content_record(self, item_id: str, payload: dict[str, Any]) -> None:
+        self._update("content_records", "id", item_id, {**_clean(payload), "updated_at": _now()})
 
     def delete_content_record(self, item_id: str) -> None:
         self._delete("content_records", "id", item_id)
@@ -393,6 +543,10 @@ class Repository:
         self._delete("documents", "id", str(document["id"]))
 
     def export_bundle(self) -> dict[str, list[dict[str, Any]]]:
+        try:
+            status_history = self._rows("task_status_history", "changed_at.desc")
+        except DatabaseError:
+            status_history = []
         bundle = {
             "tasks": self.list_tasks(),
             "waiting_items": self.list_waiting_items(),
@@ -404,6 +558,7 @@ class Repository:
             "content_records": self.list_content_records(),
             "documents": self.list_documents(),
             "document_templates": self.list_document_templates(),
+            "task_status_history": status_history,
         }
         for document in bundle["documents"]:
             document.pop("_file_bytes", None)
