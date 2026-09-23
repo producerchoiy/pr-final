@@ -350,12 +350,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal-700); box-s
 .calendar-nav { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-bottom: .8rem; }
 .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: .35rem; }
 .calendar-day-name { padding: .4rem; color: var(--ink-500); text-align: center; font-size: .72rem; font-weight: 850; }
-.calendar-cell { min-height: 128px; padding: .45rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.calendar-cell { min-height: 128px; padding: .45rem; border: 1px solid var(--line); border-radius: 12px; background: #fff; cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.calendar-cell:hover, .calendar-cell:focus-visible { border-color: var(--teal-700); box-shadow: 0 7px 20px rgba(8,119,122,.12); outline: none; transform: translateY(-1px); }
 .calendar-cell.muted { opacity: .4; background: transparent; }
 .calendar-date { font-size: .76rem; font-weight: 900; }
 .calendar-cell-head { display: flex; align-items: center; justify-content: space-between; gap: .25rem; }
 .calendar-add { display: grid; width: 1.6rem; height: 1.6rem; place-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--teal-800); background: var(--teal-50); font-weight: 900; line-height: 1; }
 .calendar-add:hover { color: #fff; border-color: var(--teal-700); background: var(--teal-700); }
+.calendar-cell:hover .calendar-add, .calendar-cell:focus-visible .calendar-add { color: #fff; border-color: var(--teal-700); background: var(--teal-700); }
 .calendar-task { display: block; width: 100%; margin-top: .3rem; overflow: hidden; border: 0; border-radius: 7px; padding: .32rem; color: var(--teal-800); background: var(--teal-50); text-align: left; text-overflow: ellipsis; white-space: nowrap; font-size: .66rem; }
 .calendar-task.completed { color: var(--ink-500); background: #edf2f2; text-decoration: line-through; }
 
@@ -404,6 +406,16 @@ th { color: var(--ink-700); background: #f4f9f8; }
 .toast-root { position: fixed; z-index: 120; right: 1rem; bottom: 1rem; display: grid; gap: .5rem; }
 .toast { max-width: 380px; padding: .7rem .9rem; border: 1px solid #abd1ce; border-radius: 13px; color: #fff; background: var(--navy-900); box-shadow: var(--shadow); font-size: .82rem; animation: toast-in .2s ease; }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } }
+
+.alarm-root { position: fixed; z-index: 150; top: 1rem; right: 1rem; left: 1rem; display: grid; justify-items: center; pointer-events: none; }
+.site-alarm { position: relative; display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: .8rem; width: min(680px,100%); padding: .9rem 3rem .9rem 1rem; border: 2px solid #f0bd35; border-radius: 18px; color: var(--navy-900); background: #fff9e7; box-shadow: 0 18px 50px rgba(3,31,36,.25); pointer-events: auto; animation: alarm-in .25s ease; }
+.site-alarm-icon { font-size: 1.7rem; animation: alarm-ring .65s ease 3; }
+.site-alarm strong { display: block; font-size: .9rem; }
+.site-alarm p { margin: .18rem 0 0; color: var(--ink-700); font-size: .8rem; }
+.site-alarm > button:not(.site-alarm-close) { min-height: 2.35rem; padding: .42rem .7rem; border: 1px solid #d9aa2d; border-radius: 10px; color: var(--navy-900); background: #fff; font-size: .76rem; font-weight: 850; }
+.site-alarm-close { position: absolute; top: .35rem; right: .45rem; width: 2rem; height: 2rem; border: 0; border-radius: 50%; color: var(--ink-700); background: transparent; font-size: 1.3rem; }
+@keyframes alarm-in { from { opacity: 0; transform: translateY(-16px); } }
+@keyframes alarm-ring { 0%,100% { transform: rotate(0); } 25% { transform: rotate(-12deg); } 75% { transform: rotate(12deg); } }
 
 .lock-screen {
   position: fixed;
@@ -499,6 +511,9 @@ body.locked #app-shell, body.locked .mobile-nav { visibility: hidden; }
   .modal-backdrop { align-items: end; padding: .5rem; }
   .toast-root { right: .55rem; bottom: calc(78px + env(safe-area-inset-bottom)); left: .55rem; }
   .toast { max-width: none; }
+  .alarm-root { top: .5rem; right: .5rem; left: .5rem; }
+  .site-alarm { grid-template-columns: auto 1fr; padding: .75rem 2.5rem .75rem .75rem; }
+  .site-alarm > button:not(.site-alarm-close) { grid-column: 1 / -1; width: 100%; }
 }
 
 @media (orientation: landscape) and (max-height: 600px) and (max-width: 1000px) {

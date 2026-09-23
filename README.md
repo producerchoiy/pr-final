@@ -13,10 +13,13 @@
 - 30초 간격 일정 알림, 브라우저 알림 권한 지원
 - 이전 날·다음 날·날짜 선택으로 과거 시간표와 완료 기록 확인
 - 월간 스케줄표 날짜 칸에서 해당 날짜 일정 즉시 추가
+- 월간 스케줄표의 날짜 칸 전체를 클릭하거나 키보드 Enter로 일정 추가
+- 새 탭 첫 접속 시 비밀번호 인증, 인증 전 D1 API 접근 차단
+- 사이트가 열려 있을 때 30분 전 알림음·화면 알림·브라우저 알림
 - 자동 정렬과 내 순서(드래그, 모바일 위·아래 버튼)
 - 프로젝트, 콘텐츠 실적, 자료 수정·삭제
 - CSV 실적 다운로드
-- 화면 잠금과 비밀번호 해제(기본값 `0915`)
+- 접속 잠금과 비밀번호 해제(기본값 `0915`)
 - 휴대폰·태블릿·데스크톱 반응형 화면
 - 사용자가 제공한 사진을 글자와 겹치지 않는 독립 액자로 배치
 - D1만 실제 업무 데이터의 단일 출처로 사용하며, 화면 재실행 시 샘플 데이터를 자동 생성하지 않음
@@ -50,7 +53,7 @@ npm run db:migrate:remote
 npm run db:migrate:local
 ```
 
-## 3. 잠금 비밀번호 설정
+## 3. 처음 접속 비밀번호 설정
 
 화면 잠금 비밀번호를 Cloudflare의 암호화된 Secret으로 저장합니다.
 
@@ -60,7 +63,11 @@ npx wrangler secret put APP_LOCK_PASSWORD
 
 질문이 나오면 `0915`를 입력합니다. Secret이 없을 때도 기본값은 `0915`이지만, 실제 배포에서는 반드시 Secret 설정을 권장합니다.
 
-화면 잠금은 같은 기기에서 화면 내용을 잠시 가리는 기능입니다. 사이트 자체를 외부인에게 비공개로 만들려면 Cloudflare Access 같은 별도 인증 정책을 함께 사용하세요.
+이번 버전은 화면만 가리지 않고 서명된 보안 쿠키가 없는 요청의 D1 API 접근도 차단합니다. 새 브라우저 탭의 첫 접속에서는 비밀번호를 다시 확인하고, 잠금 버튼을 누르면 서버 세션도 즉시 해제됩니다. 조직 전체의 계정 기반 접근 제어가 필요하면 Cloudflare Access를 추가로 사용할 수 있습니다.
+
+명령 프롬프트 로그인 문제를 피하려면 Cloudflare 대시보드의 **Workers & Pages → chopd → Settings → Variables and Secrets**에서도 `APP_LOCK_PASSWORD`를 Secret으로 만들고 값 `0915`를 저장할 수 있습니다.
+
+사이트 내부 알림은 사이트가 열려 있을 때 30초마다 확인하며, 알림 시각이 되면 알림음과 화면 상단 알림창이 함께 나타납니다. 브라우저의 자동 재생 정책에 맞춰 비밀번호 해제 시 알림음을 준비합니다. **설정 → 사이트 알림 테스트**를 눌러 현재 기기의 소리 크기와 무음 모드를 확인하세요.
 
 ## 4. 먼저 직접 배포해 보기
 
@@ -81,7 +88,7 @@ Cloudflare 대시보드에서 다음 순서로 연결합니다.
 5. 배포 명령은 `npx wrangler deploy`로 설정합니다.
 6. 저장 후 배포합니다.
 
-이 배포본의 `wrangler.jsonc`에는 `chopd` Worker 이름과 연결된 D1 ID가 반영되어 있습니다. Secret은 GitHub 파일에 쓰지 말고 Cloudflare에서 설정하세요.
+이 배포본의 `wrangler.jsonc`에는 `chopd` Worker 이름과 연결된 D1 ID가 반영되어 있습니다. `APP_LOCK_PASSWORD`는 GitHub 파일에 쓰지 말고 Cloudflare Secret으로 설정하세요.
 
 ## 모바일·태블릿 사용
 
@@ -94,7 +101,7 @@ Cloudflare 대시보드에서 다음 순서로 연결합니다.
 ## 데이터 원칙
 
 - 실제 업무 정보는 D1에만 저장합니다.
-- `sessionStorage`는 현재 화면의 잠금 여부에만 사용합니다.
+- `sessionStorage`는 현재 탭의 잠금 해제 여부만 관리하고 실제 API 인증은 서명된 HttpOnly 쿠키로 확인합니다.
 - 완료는 삭제가 아니라 상태 변경이며, 완료 직전 상태를 `previous_status`에 보관합니다.
 - 삭제는 `deleted_at`을 기록하는 소프트 삭제입니다.
 - 반복 일정은 원본 규칙 하나로 계산하고, 오늘만 삭제하면 `excluded_dates`에 기록합니다.
@@ -104,7 +111,7 @@ Cloudflare 대시보드에서 다음 순서로 연결합니다.
 
 ```text
 PR-Flow-Cloudflare-D1/
-├── migrations/0001_initial.sql   # D1 테이블과 인덱스
+├── migrations/0001_initial.sql   # D1 기본 테이블과 인덱스
 ├── public/                        # 반응형 화면과 사진
 ├── scripts/configure-d1.mjs       # D1 ID 설정 도우미
 ├── src/index.js                   # Worker API
@@ -124,7 +131,7 @@ npx wrangler dev
 ## 참고
 
 - 기존 Streamlit/Supabase 데이터는 자동으로 D1에 복사되지 않습니다.
-- 브라우저 탭이 완전히 종료된 상태에서도 알림을 받으려면 별도 Web Push 서비스가 필요합니다.
+- 사이트 알림은 사이트가 열려 있고 기기가 음소거 상태가 아닐 때 동작합니다.
 - 사진은 `public/assets`의 동일한 파일명으로 교체할 수 있습니다.
 
-공식 문서: [Cloudflare Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/), [Cloudflare D1 Migrations](https://developers.cloudflare.com/d1/reference/migrations/), [D1 Worker Binding API](https://developers.cloudflare.com/d1/worker-api/d1-database/)
+공식 문서: [Cloudflare Workers Static Assets](https://developers.cloudflare.com/workers/static-assets/), [Cloudflare D1 Migrations](https://developers.cloudflare.com/d1/reference/migrations/)

@@ -30,8 +30,11 @@ const state = {
 
 const pageRoot = document.querySelector("#page");
 const modalRoot = document.querySelector("#modal-root");
+const alarmRoot = document.querySelector("#alarm-root");
 const noticeArea = document.querySelector("#notice-area");
 const lockScreen = document.querySelector("#lock-screen");
+let alarmAudioContext = null;
+let alarmHideTimer = null;
 
 function e(value = "") {
   return String(value)
@@ -101,6 +104,9 @@ async function api(path, options = {}) {
   });
   let data;
   try { data = await response.json(); } catch { data = {}; }
+  if (response.status === 401 && !["/api/unlock", "/api/session"].includes(path)) {
+    lockApp({ notifyServer: false });
+  }
   if (!response.ok) throw new Error(data.message || "저장 중 오류가 발생했습니다.");
   return data;
 }
@@ -111,6 +117,44 @@ function toast(message) {
   node.textContent = message;
   document.querySelector("#toast-root").append(node);
   setTimeout(() => node.remove(), 3600);
+}
+
+function prepareAlarmSound() {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return false;
+  if (!alarmAudioContext) alarmAudioContext = new AudioContextClass();
+  if (alarmAudioContext.state === "suspended") alarmAudioContext.resume().catch(() => {});
+  return true;
+}
+
+function playAlarmSound() {
+  if (!prepareAlarmSound() || alarmAudioContext.state !== "running") return;
+  const start = alarmAudioContext.currentTime;
+  [0, .24, .48].forEach((delay, index) => {
+    const oscillator = alarmAudioContext.createOscillator();
+    const gain = alarmAudioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(index === 1 ? 880 : 660, start + delay);
+    gain.gain.setValueAtTime(.0001, start + delay);
+    gain.gain.exponentialRampToValueAtTime(.22, start + delay + .025);
+    gain.gain.exponentialRampToValueAtTime(.0001, start + delay + .2);
+    oscillator.connect(gain);
+    gain.connect(alarmAudioContext.destination);
+    oscillator.start(start + delay);
+    oscillator.stop(start + delay + .22);
+  });
+}
+
+function showSiteAlarm(task, message) {
+  clearTimeout(alarmHideTimer);
+  alarmRoot.innerHTML = `<section class="site-alarm" role="alertdialog" aria-label="일정 알림">
+    <div class="site-alarm-icon" aria-hidden="true">⏰</div>
+    <div><strong>일정 알림</strong><p>${e(message)}</p></div>
+    ${task?.task_id ? `<button type="button" data-action="alarm-open-task" data-id="${attr(task.task_id)}">업무 열기</button>` : ""}
+    <button class="site-alarm-close" type="button" data-action="dismiss-alarm" aria-label="알림 닫기">×</button>
+  </section>`;
+  playAlarmSound();
+  alarmHideTimer = setTimeout(() => { alarmRoot.innerHTML = ""; }, 60_000);
 }
 
 function showNotice(message) {
@@ -331,11 +375,11 @@ function monthGrid(date) {
 
 function renderCalendar() {
   const { year, month, days } = monthGrid(state.calendarDate);
-  pageRoot.innerHTML = `${heading("SCHEDULE CALENDAR", "업무·콘텐츠 스케줄표", "과거 일정도 보관됩니다. 날짜 칸의 ＋를 누르면 해당 날짜에 바로 일정을 추가할 수 있습니다.", '<button class="primary-button" type="button" data-action="new-schedule" data-date="' + attr(seoulDate()) + '">＋ 일정 추가</button>')}
+  pageRoot.innerHTML = `${heading("SCHEDULE CALENDAR", "업무·콘텐츠 스케줄표", "과거 일정도 보관됩니다. 원하는 날짜 칸을 누르면 해당 날짜가 입력된 일정 등록창이 열립니다.", '<button class="primary-button" type="button" data-action="new-schedule" data-date="' + attr(seoulDate()) + '">＋ 일정 추가</button>')}
     <section class="section-panel"><div class="calendar-nav"><button class="ghost-button" data-action="calendar-prev">← 이전 달</button><strong>${year}년 ${month+1}월</strong><button class="ghost-button" data-action="calendar-next">다음 달 →</button></div>
     <div class="calendar-grid">${WEEKDAYS.map((day) => `<div class="calendar-day-name">${day}</div>`).join("")}${days.map(({ day, iso, muted }) => {
       const tasks = state.data.tasks.filter((task) => occursOn(task, iso));
-      return `<div class="calendar-cell ${muted ? "muted" : ""}"><div class="calendar-cell-head"><span class="calendar-date">${day.getDate()}</span><button class="calendar-add" type="button" data-action="new-schedule" data-date="${attr(iso)}" aria-label="${attr(prettyFullDate(iso))} 일정 추가">＋</button></div>${tasks.slice(0,3).map((task) => `<button class="calendar-task ${task.status === "완료" ? "completed" : ""}" data-action="edit-task" data-id="${attr(task.task_id)}">${e(task.title)}</button>`).join("")}${tasks.length > 3 ? `<small>외 ${tasks.length-3}건</small>` : ""}</div>`;
+      return `<div class="calendar-cell ${muted ? "muted" : ""}" data-action="new-schedule" data-date="${attr(iso)}" role="button" tabindex="0" aria-label="${attr(prettyFullDate(iso))} 일정 추가"><div class="calendar-cell-head"><span class="calendar-date">${day.getDate()}</span><span class="calendar-add" aria-hidden="true">＋</span></div>${tasks.slice(0,3).map((task) => `<button class="calendar-task ${task.status === "완료" ? "completed" : ""}" data-action="edit-task" data-id="${attr(task.task_id)}">${e(task.title)}</button>`).join("")}${tasks.length > 3 ? `<small>외 ${tasks.length-3}건</small>` : ""}</div>`;
     }).join("")}</div></section>`;
 }
 
@@ -366,7 +410,7 @@ function renderDocuments() {
 
 function renderSettings() {
   pageRoot.innerHTML = `${heading("SETTINGS", "설정", "Cloudflare D1 저장과 화면 잠금 상태를 확인합니다.")}
-    <div class="card-grid"><section class="section-panel"><div class="section-head"><span class="section-kicker">DATA</span><h2>D1 영구 저장</h2><p>업무 데이터는 브라우저가 아니라 Cloudflare D1을 기준으로 관리합니다.</p></div><button class="secondary-button" data-action="refresh">지금 데이터 새로고침</button></section><section class="section-panel"><div class="section-head"><span class="section-kicker">NOTIFICATION</span><h2>일정 알림</h2><p>사이트가 열려 있으면 30초마다 알람을 확인합니다. 브라우저 알림을 허용하면 백그라운드 탭에서도 확인하기 쉽습니다.</p></div><button class="secondary-button" data-action="allow-notification">브라우저 알림 허용</button></section><section class="section-panel"><div class="section-head"><span class="section-kicker">PRIVACY</span><h2>화면 잠금</h2><p>우측 상단의 화면 잠금 버튼으로 즉시 내용을 가릴 수 있습니다. 운영 비밀번호는 Cloudflare Secret에서 관리합니다.</p></div><button class="lock-button" data-action="lock">🔒 지금 잠그기</button></section><section class="section-panel"><div class="section-head"><span class="section-kicker">DISPLAY</span><h2>반응형 화면</h2><p>PC, 태블릿, 휴대폰의 가로·세로 전환에 맞춰 메뉴와 카드가 자동으로 재배치됩니다.</p></div></section></div>`;
+    <div class="card-grid"><section class="section-panel"><div class="section-head"><span class="section-kicker">DATA</span><h2>D1 영구 저장</h2><p>업무 데이터는 브라우저가 아니라 Cloudflare D1을 기준으로 관리합니다.</p></div><button class="secondary-button" data-action="refresh">지금 데이터 새로고침</button></section><section class="section-panel"><div class="section-head"><span class="section-kicker">SITE ALARM</span><h2>30분 전 사이트 알림</h2><p>사이트가 열려 있으면 업무 시작 30분 전에 알림음·화면 알림·브라우저 알림을 제공합니다. 업무별로 알람 시점을 바꿀 수도 있습니다.</p></div><div class="card-actions"><button class="secondary-button" data-action="test-site-alarm">사이트 알림 테스트</button><button class="secondary-button" data-action="allow-notification">브라우저 알림 허용</button></div></section><section class="section-panel"><div class="section-head"><span class="section-kicker">PRIVACY</span><h2>접속 잠금</h2><p>새 브라우저 탭에서 처음 접속할 때 비밀번호를 확인하며, 우측 상단 버튼으로 즉시 다시 잠글 수 있습니다.</p></div><button class="lock-button" data-action="lock">🔒 지금 잠그기</button></section><section class="section-panel"><div class="section-head"><span class="section-kicker">DISPLAY</span><h2>반응형 화면</h2><p>PC, 태블릿, 휴대폰의 가로·세로 전환에 맞춰 메뉴와 카드가 자동으로 재배치됩니다.</p></div></section></div>`;
 }
 
 function render() {
@@ -401,6 +445,7 @@ function taskOptions(current) {
 function openTaskForm(task = null, defaults = {}) {
   const editing = Boolean(task);
   const initialDate = task?.execution_date || defaults.execution_date || "";
+  const reminderMinutes = task ? Number(task.reminder_minutes_before ?? 30) : 30;
   const days = (task?.repeat_days || []).map(Number);
   const history = editing ? state.data.task_status_history.filter((row) => row.task_id === task.task_id).slice(0,12) : [];
   openModal(`${modalHead(editing ? "업무 상세·수정" : "새 일정·업무 등록", editing ? task.task_id : `${initialDate ? `${prettyFullDate(initialDate)} · ` : ""}저장하면 날짜가 지나도 기록이 유지됩니다.`)}
@@ -421,7 +466,7 @@ function openTaskForm(task = null, defaults = {}) {
       <label>반복<select name="repeat_type"><option value="none" ${(task?.repeat_type || "none") === "none" ? "selected" : ""}>반복 없음</option><option value="daily" ${task?.repeat_type === "daily" ? "selected" : ""}>매일</option><option value="weekday" ${task?.repeat_type === "weekday" ? "selected" : ""}>평일</option><option value="weekly" ${task?.repeat_type === "weekly" ? "selected" : ""}>매주 특정 요일</option></select></label>
       <label>반복 종료일<input name="repeat_end_date" type="date" value="${attr(task?.repeat_end_date)}" /></label>
       <div class="full check-row"><span>반복 요일</span>${WEEKDAYS.map((day,index) => `<label><input type="checkbox" name="repeat_days" value="${index}" ${days.includes(index) ? "checked" : ""} />${day}</label>`).join("")}</div>
-      <label>알람 시점<select name="reminder_minutes_before"><option value="0">시작 시간</option><option value="5" ${Number(task?.reminder_minutes_before) === 5 ? "selected" : ""}>5분 전</option><option value="10" ${Number(task?.reminder_minutes_before) === 10 ? "selected" : ""}>10분 전</option><option value="30" ${Number(task?.reminder_minutes_before) === 30 ? "selected" : ""}>30분 전</option><option value="60" ${Number(task?.reminder_minutes_before) === 60 ? "selected" : ""}>1시간 전</option></select></label>
+      <label>알람 시점<select name="reminder_minutes_before"><option value="0" ${reminderMinutes === 0 ? "selected" : ""}>시작 시간</option><option value="5" ${reminderMinutes === 5 ? "selected" : ""}>5분 전</option><option value="10" ${reminderMinutes === 10 ? "selected" : ""}>10분 전</option><option value="30" ${reminderMinutes === 30 ? "selected" : ""}>30분 전</option><option value="60" ${reminderMinutes === 60 ? "selected" : ""}>1시간 전</option></select></label>
       <label class="check-row"><input name="reminder_enabled" type="checkbox" ${task?.reminder_enabled !== false ? "checked" : ""} /> 일정 알람 사용</label>
       <label class="full">순차 단계 · 한 줄에 하나<textarea name="workflow_steps">${e((task?.workflow_steps || []).map((step) => step.title).join("\n"))}</textarea></label>
       <label class="full">업무 설명·메모<textarea name="description">${e(task?.description || "")}</textarea></label>
@@ -528,6 +573,11 @@ async function handleAction(button, sourceEvent) {
   const action = button.dataset.action;
   const itemId = button.dataset.id;
   if (action === "close-modal") return closeModal();
+  if (action === "dismiss-alarm") { alarmRoot.innerHTML = ""; return; }
+  if (action === "alarm-open-task") {
+    alarmRoot.innerHTML = "";
+    return openTaskForm(state.data.tasks.find((task) => task.task_id === itemId));
+  }
   if (action === "backdrop-close" && button === sourceEvent?.target) return closeModal();
   if (action === "new-task") return openTaskForm();
   if (action === "new-schedule") return openTaskForm(null, { execution_date: button.dataset.date || state.scheduleDate || seoulDate() });
@@ -548,9 +598,15 @@ async function handleAction(button, sourceEvent) {
   if (action === "lock") return lockApp();
   if (action === "move-up" || action === "move-down") return moveTask(itemId, action === "move-up" ? -1 : 1);
   if (action === "allow-notification") {
+    prepareAlarmSound();
     if (!("Notification" in window)) return toast("이 브라우저는 알림을 지원하지 않습니다.");
     const permission = await Notification.requestPermission();
     return toast(permission === "granted" ? "브라우저 알림을 허용했습니다." : "브라우저 알림이 허용되지 않았습니다.");
+  }
+  if (action === "test-site-alarm") {
+    prepareAlarmSound();
+    showSiteAlarm(null, "사이트 알림음과 화면 알림이 정상적으로 연결되었습니다.");
+    return;
   }
   if (action === "toggle-complete") {
     const task = state.data.tasks.find((row) => row.task_id === itemId);
@@ -590,15 +646,19 @@ function downloadRecords() {
   link.href = url; link.download = `youtube-content-${seoulDate()}.csv`; link.click(); URL.revokeObjectURL(url);
 }
 
-function lockApp() {
-  sessionStorage.setItem("pr-flow-locked", "1");
+function lockApp({ notifyServer = true } = {}) {
+  sessionStorage.removeItem("pr-flow-unlocked");
   document.body.classList.add("locked");
   lockScreen.hidden = false;
+  closeModal();
+  if (notifyServer) {
+    fetch("/api/lock", { method: "POST", headers: { "content-type": "application/json" } }).catch(() => {});
+  }
   setTimeout(() => document.querySelector("#unlock-password")?.focus(), 0);
 }
 
 function unlockApp() {
-  sessionStorage.removeItem("pr-flow-locked");
+  sessionStorage.setItem("pr-flow-unlocked", "1");
   document.body.classList.remove("locked");
   lockScreen.hidden = true;
   document.querySelector("#unlock-password").value = "";
@@ -613,12 +673,16 @@ async function checkAlarms() {
   for (const task of state.data.tasks || []) {
     if (!task.reminder_enabled || !task.start_time || task.status === "완료" || !occursOn(task, today)) continue;
     const [hour, minute] = task.start_time.slice(0,5).split(":").map(Number);
-    const alarmMinutes = hour * 60 + minute - Number(task.reminder_minutes_before || 0);
+    const reminderMinutes = Number(task.reminder_minutes_before ?? 30);
+    const alarmMinutes = hour * 60 + minute - reminderMinutes;
     const firedAt = task.alarm_last_fired_at ? new Date(task.alarm_last_fired_at) : null;
     const firedToday = firedAt && !Number.isNaN(firedAt.getTime()) && seoulDate(firedAt) === today;
     if (alarmMinutes === currentMinutes && !firedToday) {
-      const message = `${task.start_time.slice(0,5)} ${task.title} 시간입니다.`;
+      const message = reminderMinutes > 0
+        ? `${task.start_time.slice(0,5)} ${task.title} 시작 ${reminderMinutes}분 전입니다.`
+        : `${task.start_time.slice(0,5)} ${task.title} 시간입니다.`;
       toast(`⏰ ${message}`);
+      showSiteAlarm(task, message);
       if ("Notification" in window && Notification.permission === "granted") new Notification("홍보의 바다", { body: message });
       task.alarm_last_fired_at = new Date().toISOString();
       api(`/api/tasks/${encodeURIComponent(task.task_id)}/alarm`, { method: "POST" }).catch(console.error);
@@ -656,6 +720,14 @@ document.addEventListener("click", async (event) => {
   try { await handleAction(action, event); } catch (cause) { toast(cause.message); }
 });
 
+document.addEventListener("keydown", async (event) => {
+  if (!['Enter', ' '].includes(event.key)) return;
+  const cell = event.target.closest(".calendar-cell[data-action='new-schedule']");
+  if (!cell || event.target.closest(".calendar-task")) return;
+  event.preventDefault();
+  try { await handleAction(cell, event); } catch (cause) { toast(cause.message); }
+});
+
 document.addEventListener("input", (event) => {
   if (event.target.id === "task-search") { state.taskSearch = event.target.value; renderTasks(); document.querySelector("#task-search")?.focus(); }
 });
@@ -679,10 +751,14 @@ document.addEventListener("submit", async (event) => {
       document.querySelector("#writer-result").value = `[${values.type}]\n\n제목: ${values.title}\n출연: ${values.department || "진료과"} ${values.professor || "교수"}\n\n[오프닝]\n오늘은 ${values.title}에 대해 정확하고 쉽게 알아보겠습니다.\n\n[질문]\n1. 먼저 이 주제를 시청자가 꼭 알아야 하는 이유는 무엇인가요?\n2. 흔히 잘못 알고 있는 오해는 무엇인가요?\n3. 일상에서 실천할 수 있는 예방법이나 관리법은 무엇인가요?\n4. 병원을 찾아야 하는 위험 신호는 무엇인가요?\n\n[확인된 참고자료]\n${values.reference || "의료진 검토 후 보완해 주세요."}\n\n[클로징]\n정확한 정보와 의료진 상담을 통해 건강을 지키시기 바랍니다.`;
       return toast("검토용 대본 초안을 만들었습니다.");
     } else if (form.id === "unlock-form") {
+      prepareAlarmSound();
       const values = formPayload(form);
       await api("/api/unlock", { method: "POST", body: JSON.stringify(values) });
       document.querySelector("#unlock-error").textContent = "";
-      unlockApp(); return;
+      unlockApp();
+      await reloadData();
+      await checkAlarms();
+      return;
     } else return;
     closeModal();
     await reloadData({ quiet: true });
@@ -697,9 +773,20 @@ document.querySelector("#lock-button").addEventListener("click", lockApp);
 document.querySelector("#refresh-button").addEventListener("click", () => reloadData());
 window.addEventListener("hashchange", () => navigate(location.hash.replace("#", "") || "today"));
 
-if (sessionStorage.getItem("pr-flow-locked") === "1") lockApp();
-renderNav();
-reloadData();
+async function initialize() {
+  lockApp({ notifyServer: false });
+  renderNav();
+  if (sessionStorage.getItem("pr-flow-unlocked") !== "1") return;
+  try {
+    await api("/api/session");
+    unlockApp();
+    await reloadData();
+  } catch {
+    lockApp({ notifyServer: false });
+  }
+}
+
+initialize();
 setInterval(checkAlarms, 30_000);
 setInterval(() => { if (!modalRoot.firstChild && !document.body.classList.contains("locked")) reloadData({ quiet: true }); }, 60_000);
 registerWebMcp();

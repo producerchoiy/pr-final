@@ -3,6 +3,9 @@ const JSON_HEADERS = {
   "cache-control": "no-store",
 };
 
+const SESSION_COOKIE = "pr_flow_session";
+const SESSION_DURATION_MS = 12 * 60 * 60 * 1000;
+
 const TASK_FIELDS = [
   "title", "category", "status", "previous_status", "priority", "deadline",
   "execution_date", "start_time", "end_time", "next_action", "waiting_for",
@@ -24,8 +27,11 @@ const CONTENT_FIELDS = [
 
 const DOCUMENT_FIELDS = ["title", "category", "content", "task_id"];
 
-function response(data, status = 200) {
-  return new Response(JSON.stringify(data), { status, headers: JSON_HEADERS });
+function response(data, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...JSON_HEADERS, ...extraHeaders },
+  });
 }
 
 function error(message, status = 400) {
@@ -34,6 +40,64 @@ function error(message, status = 400) {
 
 function now() {
   return new Date().toISOString();
+}
+
+function base64Url(bytes) {
+  let binary = "";
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+}
+
+function sessionSecret(env) {
+  return String(env.APP_LOCK_PASSWORD || "0915");
+}
+
+async function sessionSignature(secret, expiresAt) {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return base64Url(await crypto.subtle.sign("HMAC", key, encoder.encode(String(expiresAt))));
+}
+
+async function createSessionToken(env) {
+  const expiresAt = Date.now() + SESSION_DURATION_MS;
+  return `${expiresAt}.${await sessionSignature(sessionSecret(env), expiresAt)}`;
+}
+
+function cookieValue(request, name) {
+  const cookies = request.headers.get("cookie") || "";
+  for (const part of cookies.split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key === name) return rest.join("=");
+  }
+  return "";
+}
+
+async function hasValidSession(request, env) {
+  const token = cookieValue(request, SESSION_COOKIE);
+  const [expiresText, signature] = token.split(".");
+  const expiresAt = Number(expiresText);
+  if (!expiresAt || expiresAt <= Date.now() || !signature) return false;
+  const expected = await sessionSignature(sessionSecret(env), expiresAt);
+  if (signature.length !== expected.length) return false;
+  let difference = 0;
+  for (let index = 0; index < signature.length; index += 1) {
+    difference |= signature.charCodeAt(index) ^ expected.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+function sessionCookie(token) {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Strict`;
+}
+
+function clearSessionCookie() {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
 }
 
 function id(prefix) {
@@ -138,7 +202,7 @@ async function createTask(db, payload) {
     project_id: payload.project_id || null,
     workflow_steps: JSON.stringify(payload.workflow_steps || []),
     reminder_enabled: payload.reminder_enabled === false ? 0 : 1,
-    reminder_minutes_before: Number(payload.reminder_minutes_before || 0),
+    reminder_minutes_before: Number(payload.reminder_minutes_before ?? 30),
     alarm_last_fired_at: null,
     repeat_type: payload.repeat_type || "none",
     repeat_days: JSON.stringify(payload.repeat_days || []),
@@ -358,9 +422,20 @@ async function routeApi(request, env) {
   if (path === "/api/unlock" && method === "POST") {
     const payload = await bodyOf(request);
     const password = String(env.APP_LOCK_PASSWORD || "0915");
-    return payload.password === password ? response({ ok: true }) : error("비밀번호가 맞지 않습니다.", 401);
+    if (payload.password !== password) return error("비밀번호가 맞지 않습니다.", 401);
+    const token = await createSessionToken(env);
+    return response({ ok: true }, 200, { "set-cookie": sessionCookie(token) });
   }
   if (path === "/api/health") return response({ ok: true, storage: env.DB ? "D1" : "not-connected", time: now() });
+  if (path === "/api/session" && method === "GET") {
+    return await hasValidSession(request, env)
+      ? response({ ok: true })
+      : error("잠금 해제가 필요합니다.", 401);
+  }
+  if (path === "/api/lock" && method === "POST") {
+    return response({ ok: true }, 200, { "set-cookie": clearSessionCookie() });
+  }
+  if (!(await hasValidSession(request, env))) return error("잠금 해제가 필요합니다.", 401);
   if (!env.DB) return error("D1 데이터베이스가 연결되지 않았습니다. README의 D1 연결 순서를 확인해 주세요.", 503);
   if (path === "/api/bootstrap" && method === "GET") return response(await bootstrap(env.DB));
   if (path === "/api/tasks" && method === "POST") return createTask(env.DB, await bodyOf(request));
