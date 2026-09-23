@@ -1,0 +1,16 @@
+{
+  "name": "chopd",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "node --check src/index.js && node --check public/app.js",
+    "db:migrate:local": "wrangler d1 migrations apply pr-flow-db --local",
+    "db:migrate:remote": "wrangler d1 migrations apply pr-flow-db --remote"
+  },
+  "devDependencies": {
+    "wrangler": "^4.35.0"
+  }
+}

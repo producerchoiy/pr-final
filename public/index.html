@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b4650" />
+    <meta name="description" content="홍보 업무, 일정, 회신, 프로젝트와 콘텐츠 실적을 하나의 흐름으로 관리합니다." />
+    <title>홍보의 바다</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" type="module"></script>
+  </head>
+  <body>
+    <div id="app-shell">
+      <aside class="sidebar" aria-label="주 메뉴">
+        <a class="sidebar-brand" href="#today" data-home-link>
+          <span class="brand-mark">PR</span>
+          <span><strong>홍보의 바다</strong><small>PR WORKFLOW</small></span>
+        </a>
+        <nav id="main-nav" class="main-nav"></nav>
+        <div class="sidebar-foot">
+          <span class="status-dot"></span>
+          <span>D1 영구 저장</span>
+        </div>
+      </aside>
+
+      <main class="main-shell">
+        <header class="topbar">
+          <div class="title-block">
+            <a href="#today" data-home-link class="home-title">홍보의 바다</a>
+            <p>업무·일정·회신·성과를 한곳에서 관리합니다.</p>
+          </div>
+          <div class="memory-gallery" aria-label="소중한 사진 액자">
+            <figure><img src="/assets/sea_poem.jpg" alt="바다 글 액자" /></figure>
+            <figure><img src="/assets/little_sister.jpg" alt="동생 글 액자" /></figure>
+            <figure><img src="/assets/family_duo.jpg" alt="가족사진 액자" /></figure>
+            <figure><img src="/assets/family_table.jpg" alt="가족 식사 사진 액자" /></figure>
+          </div>
+          <div class="top-actions">
+            <button class="icon-button" id="refresh-button" type="button" aria-label="새로고침" title="D1 데이터 새로고침">↻</button>
+            <button class="lock-button" id="lock-button" type="button"><span aria-hidden="true">🔒</span> 화면 잠금</button>
+          </div>
+        </header>
+
+        <section id="notice-area" aria-live="polite"></section>
+        <section id="page" tabindex="-1"></section>
+      </main>
+    </div>
+
+    <nav id="mobile-nav" class="mobile-nav" aria-label="모바일 주 메뉴"></nav>
+
+    <div id="modal-root"></div>
+    <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+    <div id="lock-screen" class="lock-screen" hidden>
+      <div class="lock-card">
+        <div class="lock-symbol" aria-hidden="true">🔒</div>
+        <p class="eyebrow">PRIVATE WORKSPACE</p>
+        <h1>화면이 잠겼습니다.</h1>
+        <p>홍보 업무를 다시 보려면 비밀번호를 입력해 주세요.</p>
+        <form id="unlock-form">
+          <label for="unlock-password">잠금 비밀번호</label>
+          <input id="unlock-password" name="password" type="password" inputmode="numeric" maxlength="12" autocomplete="off" placeholder="••••" required />
+          <button type="submit" class="primary-button">잠금 해제</button>
+          <p id="unlock-error" class="form-error" role="alert"></p>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>
